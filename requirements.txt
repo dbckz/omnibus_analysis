@@ -1,0 +1,17 @@
+# Requirements for Digital Omnibus Semantic Analysis
+
+# Text extraction
+pdfplumber>=0.10.0
+python-docx>=0.8.11
+
+# ML and embeddings
+sentence-transformers>=2.2.0
+scikit-learn>=1.0.0
+numpy>=1.21.0
+pandas>=1.3.0
+
+# For dimensionality reduction (optional visualization)
+umap-learn>=0.5.0
+
+# Progress bars
+tqdm>=4.64.0
