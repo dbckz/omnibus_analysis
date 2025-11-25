@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Download all PDF responses from the European Commission's Digital Omnibus consultation.
-Final working version based on actual API structure.
+Download all responses from the European Commission's Digital Omnibus consultation.
+FIXED VERSION - Handles PDF, DOCX, and other file formats correctly.
 """
 
 import json
@@ -23,10 +23,19 @@ PUBLICATION_ID = "20401"
 OUTPUT_DIR = Path(f"{PUBLICATION_ID}_digital_omnibus")
 ATTACHMENTS_DIR = OUTPUT_DIR / "attachments"
 
-# API configuration (discovered from diagnostic)
+# API configuration
 BASE_URL = "https://ec.europa.eu/info/law/better-regulation/"
 FEEDBACK_ENDPOINT = "api/allFeedback"
-ATTACHMENT_ENDPOINT = "api/downloadAttachment"  # Will try multiple formats
+DOWNLOAD_ENDPOINT = "api/download/"
+
+# File type magic bytes for verification
+FILE_SIGNATURES = {
+    'pdf': b'%PDF',
+    'docx': b'PK\x03\x04',  # DOCX is a ZIP file
+    'doc': b'\xD0\xCF\x11\xE0',  # Old Word format
+    'xlsx': b'PK\x03\x04',  # XLSX is also a ZIP file
+    'zip': b'PK\x03\x04',
+}
 
 def log_message(message):
     """Print timestamped log message."""
@@ -45,36 +54,82 @@ def fetch_json(url, params=None):
         response = requests.get(url, params=params, headers=headers, timeout=30)
         if response.status_code == 200:
             return response.json()
-        else:
-            log_message(f"  HTTP {response.status_code}: {url}")
-            return None
+        return None
     except Exception as e:
         log_message(f"  Error fetching {url}: {e}")
         return None
 
-def download_file(url, filepath):
-    """Download a file from URL to filepath."""
+def detect_file_type(first_bytes):
+    """Detect file type from magic bytes."""
+    for file_type, signature in FILE_SIGNATURES.items():
+        if first_bytes.startswith(signature):
+            return file_type
+    return None
+
+def download_file(url, filepath, expected_extension=None):
+    """Download a file from URL to filepath and verify it's valid."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        "Accept": "application/pdf,*/*",
+        "Accept": "*/*",
     }
     
     try:
         response = requests.get(url, headers=headers, timeout=60, stream=True)
-        if response.status_code == 200:
-            with open(filepath, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            return True
-        return False
+        if response.status_code != 200:
+            return False, "HTTP error"
+        
+        # Download to temporary file first
+        temp_path = filepath.with_suffix('.tmp')
+        first_chunk = None
+        
+        with open(temp_path, 'wb') as f:
+            for i, chunk in enumerate(response.iter_content(chunk_size=8192)):
+                if i == 0:
+                    first_chunk = chunk
+                f.write(chunk)
+        
+        # Verify file is valid
+        if not first_chunk or len(first_chunk) < 4:
+            os.remove(temp_path)
+            return False, "Empty file"
+        
+        # Check file signature
+        detected_type = detect_file_type(first_chunk)
+        
+        if detected_type:
+            # Valid file detected
+            # Check if extension matches
+            if expected_extension:
+                expected_lower = expected_extension.lower().lstrip('.')
+                # Handle DOCX/XLSX (both are ZIP files)
+                if detected_type == 'docx' and expected_lower in ['docx', 'xlsx', 'pptx']:
+                    detected_type = expected_lower
+            
+            # Move temp file to final location
+            if os.path.exists(filepath):
+                os.remove(filepath)
+            os.rename(temp_path, filepath)
+            return True, detected_type
+        else:
+            # Unknown file type - might be HTML error page
+            if b'<html' in first_chunk.lower() or b'<!doctype' in first_chunk.lower():
+                os.remove(temp_path)
+                return False, "HTML page"
+            else:
+                # Unknown but not HTML - keep it anyway
+                os.rename(temp_path, filepath)
+                return True, "unknown"
+        
     except Exception as e:
-        return False
+        if temp_path.exists():
+            os.remove(temp_path)
+        return False, str(e)
 
 def fetch_all_feedbacks():
     """Fetch all feedback submissions from the API."""
     all_feedbacks = []
     page = 0
-    page_size = 100  # Request 100 per page for efficiency
+    page_size = 100
     
     log_message("Fetching feedback submissions...")
     
@@ -90,88 +145,96 @@ def fetch_all_feedbacks():
         
         data = fetch_json(url, params)
         if not data:
-            log_message(f"  Failed to fetch page {page}")
             break
         
-        # Extract feedbacks from "content" key (Spring Data REST format)
         feedbacks = data.get("content", [])
         if not feedbacks:
-            log_message(f"  No more feedbacks found")
             break
         
         all_feedbacks.extend(feedbacks)
         log_message(f"    Found {len(feedbacks)} feedbacks, total: {len(all_feedbacks)}")
         
-        # Check pagination info
         if "totalPages" in data:
             total_pages = data["totalPages"]
             log_message(f"    Progress: page {page + 1} of {total_pages}")
             if page >= total_pages - 1:
                 break
         elif "last" in data and data["last"]:
-            # Spring Data format: "last" boolean indicates last page
-            log_message(f"    Reached last page")
             break
         elif len(feedbacks) < page_size:
-            # Got fewer results than requested, must be last page
-            log_message(f"    Received {len(feedbacks)} < {page_size}, must be last page")
             break
         
         page += 1
-        time.sleep(1)  # Be respectful to the server
+        time.sleep(1)
         
-        # Safety limit
         if page > 100:
-            log_message("  Warning: Exceeded 100 pages, stopping")
             break
     
     return all_feedbacks
 
 def download_attachment_file(attachment, feedback_id, index, total):
-    """Download a single attachment file."""
+    """Download a single attachment file with correct extension."""
     att_id = attachment.get("id")
     doc_id = attachment.get("documentId")
-    filename = attachment.get("fileName", f"{att_id}.pdf")
+    original_filename = attachment.get("fileName", f"{att_id}.pdf")
+    
+    if not doc_id:
+        log_message(f"  [{index}/{total}] ✗ No documentId for attachment {att_id}")
+        return "failed", original_filename, None
+    
+    # Preserve original extension
+    original_path = Path(original_filename)
+    extension = original_path.suffix  # e.g., '.pdf', '.docx'
+    base_name = original_path.stem
     
     # Clean filename
-    filename = str(filename).replace("/", "_").replace("\\", "_")
+    base_name = base_name.replace("/", "_").replace("\\", "_").replace(":", "_")
     
-    # Ensure unique filename by prepending ID
-    if not filename.startswith(str(att_id)):
-        base, ext = os.path.splitext(filename)
-        filename = f"{att_id}_{base}{ext}"
+    # Create unique filename with ID
+    if not base_name.startswith(str(att_id)):
+        filename = f"{att_id}_{base_name}{extension}"
+    else:
+        filename = f"{base_name}{extension}"
     
     filepath = ATTACHMENTS_DIR / filename
     
-    # Skip if already exists
+    # Check if already exists and is valid
     if filepath.exists():
-        log_message(f"  [{index}/{total}] ⏭️  Skipping (exists): {filename}")
-        return "exists", filename
-    
-    # Try different download URL patterns
-    download_urls = [
-        # Pattern 1: Using attachment ID
-        f"{BASE_URL}{ATTACHMENT_ENDPOINT}?id={att_id}",
-        f"{BASE_URL}api/attachment/{att_id}",
-        # Pattern 2: Using document ID
-        f"{BASE_URL}{ATTACHMENT_ENDPOINT}?documentId={doc_id}",
-        f"{BASE_URL}api/document/{doc_id}",
-        # Pattern 3: Legacy patterns
-        f"{BASE_URL}brpapi/attachment/{att_id}",
-    ]
-    
-    for url in download_urls:
-        if download_file(url, filepath):
-            # Verify it's a real file (> 100 bytes)
-            if os.path.getsize(filepath) > 100:
-                log_message(f"  [{index}/{total}] ✓ Downloaded: {filename}")
-                return "downloaded", filename
+        file_size = os.path.getsize(filepath)
+        if file_size > 1000:  # At least 1KB
+            # Verify it's a valid file
+            with open(filepath, 'rb') as f:
+                first_bytes = f.read(20)
+            
+            detected = detect_file_type(first_bytes)
+            if detected:
+                log_message(f"  [{index}/{total}] ⏭️  Skipping (exists, {detected}): {filename}")
+                return "exists", filename, detected
             else:
-                # File too small, probably an error response
+                log_message(f"  [{index}/{total}] 🔄 Re-downloading (corrupted): {filename}")
                 os.remove(filepath)
+        else:
+            log_message(f"  [{index}/{total}] 🔄 Re-downloading (too small): {filename}")
+            os.remove(filepath)
     
-    log_message(f"  [{index}/{total}] ✗ Failed: {filename}")
-    return "failed", filename
+    # Download using documentId
+    download_url = f"{BASE_URL}{DOWNLOAD_ENDPOINT}{doc_id}"
+    
+    success, result = download_file(download_url, filepath, extension)
+    
+    if success:
+        file_size = os.path.getsize(filepath)
+        if file_size > 1000:
+            log_message(f"  [{index}/{total}] ✓ Downloaded: {filename} ({result}, {file_size:,} bytes)")
+            return "downloaded", filename, result
+        else:
+            log_message(f"  [{index}/{total}] ✗ File too small: {filename} ({file_size} bytes)")
+            if os.path.exists(filepath):
+                os.remove(filepath)
+            return "failed", filename, "too_small"
+    
+    log_message(f"  [{index}/{total}] ✗ Failed: {filename} ({result})")
+    return "failed", filename, result
 
 def download_attachments(feedbacks):
     """Download all attachments from feedbacks."""
@@ -179,8 +242,8 @@ def download_attachments(feedbacks):
     
     attachment_records = []
     stats = {"downloaded": 0, "exists": 0, "failed": 0}
+    file_type_counts = {}
     
-    # Count total attachments
     total_attachments = sum(len(fb.get("attachments", [])) for fb in feedbacks)
     log_message(f"  Total attachments to download: {total_attachments}")
     
@@ -191,11 +254,14 @@ def download_attachments(feedbacks):
         
         for attachment in attachments:
             current += 1
-            status, filename = download_attachment_file(
+            status, filename, file_type = download_attachment_file(
                 attachment, feedback_id, current, total_attachments
             )
             
             stats[status] += 1
+            
+            if file_type and file_type != "too_small":
+                file_type_counts[file_type] = file_type_counts.get(file_type, 0) + 1
             
             attachment_records.append({
                 "feedback_id": feedback_id,
@@ -203,22 +269,22 @@ def download_attachments(feedbacks):
                 "document_id": attachment.get("documentId"),
                 "filename": filename,
                 "original_filename": attachment.get("fileName"),
+                "detected_type": file_type,
                 "pages": attachment.get("pages"),
                 "size_bytes": attachment.get("size"),
                 "status": status
             })
             
             if status == "downloaded":
-                time.sleep(0.3)  # Small delay between downloads
+                time.sleep(0.5)
     
-    return attachment_records, stats
+    return attachment_records, stats, file_type_counts
 
 def save_to_csv(data, filepath):
     """Save data to CSV file."""
     if not data:
         return
     
-    # Get all unique keys from all records
     all_keys = set()
     for row in data:
         if isinstance(row, dict):
@@ -231,7 +297,6 @@ def save_to_csv(data, filepath):
         writer.writeheader()
         for row in data:
             if isinstance(row, dict):
-                # Handle nested objects/lists
                 clean_row = {}
                 for k, v in row.items():
                     if isinstance(v, (list, dict)):
@@ -243,32 +308,30 @@ def save_to_csv(data, filepath):
 def main():
     """Main execution function."""
     log_message("=" * 70)
-    log_message("Digital Omnibus Responses Downloader")
+    log_message("Digital Omnibus Downloader - FIXED VERSION")
+    log_message("Handles PDF, DOCX, and other file formats")
     log_message(f"Publication ID: {PUBLICATION_ID}")
     log_message(f"Output directory: {OUTPUT_DIR}")
     log_message("=" * 70)
     
-    # Create directories
     OUTPUT_DIR.mkdir(exist_ok=True)
     ATTACHMENTS_DIR.mkdir(exist_ok=True)
     
-    # Step 1: Fetch all feedbacks
+    # Fetch all feedbacks
     feedbacks = fetch_all_feedbacks()
     log_message(f"\n✓ Total feedbacks fetched: {len(feedbacks)}")
     
     if not feedbacks:
-        log_message("\n❌ No feedbacks found. Check your internet connection.")
+        log_message("\n❌ No feedbacks found.")
         return
     
-    # Step 2: Save feedbacks metadata
+    # Save metadata
     log_message("\nSaving feedback metadata...")
     
-    # Save complete raw JSON
     with open(OUTPUT_DIR / "feedbacks_raw.json", "w", encoding="utf-8") as f:
         json.dump(feedbacks, f, indent=2, ensure_ascii=False)
-    log_message(f"  ✓ Saved raw JSON to feedbacks_raw.json")
+    log_message(f"  ✓ Saved raw JSON")
     
-    # Create flattened CSV version
     flat_feedbacks = []
     for fb in feedbacks:
         flat = {
@@ -281,26 +344,25 @@ def main():
             "userType": fb.get("userType", ""),
             "language": fb.get("language", ""),
             "companySize": fb.get("companySize", ""),
-            "trNumber": fb.get("trNumber", ""),  # Transparency Register number
+            "trNumber": fb.get("trNumber", ""),
             "status": fb.get("status", ""),
-            "feedback_text": fb.get("feedback", "")[:1000],  # Truncate for CSV
+            "feedback_text": fb.get("feedback", "")[:1000],
             "attachmentCount": len(fb.get("attachments", [])),
             "reference": fb.get("referenceInitiative", "")
         }
         flat_feedbacks.append(flat)
     
     save_to_csv(flat_feedbacks, OUTPUT_DIR / "feedbacks.csv")
-    log_message(f"  ✓ Saved {len(flat_feedbacks)} records to feedbacks.csv")
+    log_message(f"  ✓ Saved feedbacks.csv")
     
-    # Step 3: Download attachments
-    attachment_records, stats = download_attachments(feedbacks)
+    # Download attachments
+    attachment_records, stats, file_types = download_attachments(feedbacks)
     save_to_csv(attachment_records, OUTPUT_DIR / "attachments.csv")
-    log_message(f"  ✓ Saved {len(attachment_records)} attachment records to attachments.csv")
+    log_message(f"  ✓ Saved attachments.csv")
     
-    # Step 4: Create summary statistics
+    # Generate statistics
     log_message("\nGenerating statistics...")
     
-    # By country
     country_stats = {}
     for fb in feedbacks:
         country = fb.get("country", "Unknown")
@@ -308,9 +370,8 @@ def main():
     
     country_list = [{"country": k, "count": v} for k, v in sorted(country_stats.items(), key=lambda x: x[1], reverse=True)]
     save_to_csv(country_list, OUTPUT_DIR / "countries.csv")
-    log_message(f"  ✓ Saved country statistics ({len(country_list)} countries)")
+    log_message(f"  ✓ Country statistics")
     
-    # By user type
     usertype_stats = {}
     for fb in feedbacks:
         utype = fb.get("userType", "Unknown")
@@ -318,7 +379,7 @@ def main():
     
     usertype_list = [{"userType": k, "count": v} for k, v in sorted(usertype_stats.items(), key=lambda x: x[1], reverse=True)]
     save_to_csv(usertype_list, OUTPUT_DIR / "user_types.csv")
-    log_message(f"  ✓ Saved user type statistics ({len(usertype_list)} types)")
+    log_message(f"  ✓ User type statistics")
     
     # Summary
     log_message("\n" + "=" * 70)
@@ -329,18 +390,25 @@ def main():
     log_message(f"  Downloaded: {stats['downloaded']}")
     log_message(f"  Already existed: {stats['exists']}")
     log_message(f"  Failed: {stats['failed']}")
+    
+    log_message(f"\nFile types:")
+    for ftype, count in sorted(file_types.items(), key=lambda x: x[1], reverse=True):
+        log_message(f"  {ftype.upper()}: {count}")
+    
     log_message(f"\nOutput directory: {OUTPUT_DIR.absolute()}")
     log_message("\nFiles created:")
-    log_message(f"  📊 feedbacks.csv       - Summary metadata for all {len(feedbacks)} submissions")
+    log_message(f"  📊 feedbacks.csv       - {len(feedbacks)} submissions")
     log_message(f"  📄 feedbacks_raw.json  - Complete JSON data")
-    log_message(f"  📎 attachments.csv     - Details on all {len(attachment_records)} attachments")
-    log_message(f"  🌍 countries.csv       - Submissions by country")
-    log_message(f"  👥 user_types.csv      - Submissions by user type")
-    log_message(f"  📁 attachments/        - {stats['downloaded'] + stats['exists']} PDF files")
+    log_message(f"  📎 attachments.csv     - {len(attachment_records)} attachments")
+    log_message(f"  🌍 countries.csv       - By country")
+    log_message(f"  👥 user_types.csv      - By stakeholder type")
+    log_message(f"  📁 attachments/        - {stats['downloaded'] + stats['exists']} files")
     
     if stats['failed'] > 0:
-        log_message(f"\n⚠️  {stats['failed']} attachments failed to download")
-        log_message("   Check attachments.csv for details on failed downloads")
+        log_message(f"\n⚠️  {stats['failed']} attachments failed")
+        log_message("   Check attachments.csv for details")
+    
+    log_message("\n✨ All files should now work correctly (PDF, DOCX, etc.)!")
 
 if __name__ == "__main__":
     main()
