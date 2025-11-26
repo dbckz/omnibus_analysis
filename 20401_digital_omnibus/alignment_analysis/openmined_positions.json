@@ -1,0 +1,40 @@
+{
+  "core_positions": [
+    {
+      "topic": "Privacy-enhancing technologies (PETs)",
+      "position": "OpenMined advocates for EU-level regulatory recognition and standardisation of privacy-preserving computation protocols (federated learning, secure multi-party computation, homomorphic encryption, differential privacy, decentralised data networks) as the solution to enable data collaboration without data transfer.",
+      "key_quote": "Privacy-preserving computation protocols resolve this tension not by weakening either objective, but by changing the fundamental paradigm: instead of moving data to computation, computation moves to the data."
+    },
+    {
+      "topic": "GDPR and data protection safeguards",
+      "position": "OpenMined argues current GDPR frameworks create regulatory paralysis by assuming bilateral data transfers between two parties, when modern data is inherently multi-party. They advocate maintaining strong privacy protections but enabling them through technical measures rather than administrative processes.",
+      "key_quote": "The regulations assume data moves between two clearly defined parties, but modern data is multi-party from the start. Whether it's a family's smart thermostat or a network of hospitals collaborating on research, value now comes from interconnection, not transfer."
+    },
+    {
+      "topic": "Regulatory fragmentation and legal certainty",
+      "position": "OpenMined strongly advocates for harmonised EU-level guidance rather than 27 different Member State interpretations. They argue regulatory uncertainty is the primary barrier to PET adoption, causing organisations to default to less privacy-protective traditional methods simply because their legal status is clearer.",
+      "key_quote": "Only EU-level legislative updates or regulatory guidance can provide the harmonised legal certainty necessary for these technologies to fulfil their potential. Without this clarity from Brussels, Europe risks worsening the damaging perception that it regulates against innovation rather than enabling it."
+    },
+    {
+      "topic": "SME and mid-cap accessibility",
+      "position": "OpenMined argues current bilateral data-sharing frameworks create power asymmetries favouring large enterprises who can afford extensive legal teams and months-long bilateral negotiations, while SMEs are excluded from the data economy.",
+      "key_quote": "The framework thus creates a data economy accessible only to those who can afford both compliance infrastructure and extensive bilateral dealmaking."
+    },
+    {
+      "topic": "Technical standards as administrative simplification",
+      "position": "OpenMined proposes replacing lengthy legal negotiations and contractual security requirements with mathematical privacy guarantees (differential privacy) and cryptographic proofs that can technically demonstrate compliance.",
+      "key_quote": "When using differential privacy with formally proven privacy bounds, organisations can mathematically demonstrate privacy protection levels, potentially replacing lengthy negotiations about privacy safeguards with standardised technical parameters."
+    },
+    {
+      "topic": "Data Act and Model Contractual Terms",
+      "position": "OpenMined recommends integrating privacy-preserving computation protocols into the Data Act's model contractual terms and establishing a dedicated working group of legal, technical, and regulatory experts to address integration challenges.",
+      "key_quote": "The Digital Omnibus should acknowledge that potentially transformational privacy-preserving approaches are hindered by a notable lack of legal clarity. While the model contractual terms under development for the Data Act represent one opportunity to address this gap, a more comprehensive approach is needed."
+    },
+    {
+      "topic": "Common European Data Spaces",
+      "position": "OpenMined argues privacy-preserving computation protocols could support the development of Common European Data Spaces while ensuring EU rules on personal data, consumer protection, and competition law are respected.",
+      "key_quote": "Such protocols could support the development of Common European Data Spaces while ensuring that EU rules and values with regard to personal data, consumer protection, and competition law are respected."
+    }
+  ],
+  "overall_stance": "OpenMined advocates for a paradigm shift in EU data governance from bilateral data transfer frameworks to decentralised privacy-preserving computation protocols. They position PETs not as a weakening of privacy protections but as a technical solution that simultaneously enables data collaboration and strengthens privacy. Their central argument is that regulatory uncertainty—not technical capability—is the primary barrier, and that the Digital Omnibus represents a unique opportunity to provide harmonised EU-level legal clarity that would unlock innovation while advancing European values of privacy and democratic data governance."
+}
